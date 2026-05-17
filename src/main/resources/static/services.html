@@ -44,16 +44,21 @@
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
         }
 
+        /* Adjusted image display container */
         .service-img {
             width: 100%;
             height: 180px;
-            background: #0077b5; /* LinkedIn Blue */
+            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 4rem;
-            color: white;
-            font-weight: 800;
+            background-color: var(--bg-offset);
+        }
+
+        .service-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Keeps image proportions clean */
         }
 
         .service-info { padding: 1.5rem; text-align: center; }
@@ -71,7 +76,9 @@
 
     <div class="services-grid">
         <a href="/linkedin-premium.html" class="service-card">
-            <div class="service-img">in</div>
+            <div class="service-img">
+                <img src="/linkedin-banner.png" alt="LinkedIn Premium">
+            </div>
             <div class="service-info">
                 <h3>LinkedIn Premium</h3>
                 <p>Career Plan - 3 Months Access</p>
@@ -79,7 +86,9 @@
         </a>
 
         <a href="/coursera-plus.html" class="service-card">
-            <div class="service-img" style="background: #0056D2;">C</div>
+            <div class="service-img">
+                <img src="/coursera-banner.png" alt="Coursera Plus">
+            </div>
             <div class="service-info">
                 <h3>Coursera Plus</h3>
                 <p>1-Year Access (1-Month Warranty)</p>
