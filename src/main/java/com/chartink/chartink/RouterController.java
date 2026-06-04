@@ -169,23 +169,10 @@ public class RouterController {
             if (text.startsWith("/adminstats") && isAdmin(chatId)) { handleAdminStats(chatId); return "OK"; }
             if (text.startsWith("/adminusers") && isAdmin(chatId)) { handleAdminUsers(chatId); return "OK"; }
             if (text.startsWith("/admintop") && isAdmin(chatId)) { handleAdminTop(chatId); return "OK"; }
-            try {
-    if (text.startsWith("/setlimit") && isAdmin(chatId)) { 
-        handleSetLimitCommand(chatId, text); 
-        return "OK"; 
-    }
-} catch (Exception e) {
-    sendTelegram(chatId, "⚠️ Internal Command Error: " + e.getMessage());
-    return "OK";
-}
-
-            if (text.startsWith("/link")) { handleCustomLink(chatId, text); return "OK"; }
-
-            return "OK";
-        } catch (Exception ex) {
-            return "OK";
-        }
-    }
+            if (text.startsWith("/setlimit") && isAdmin(chatId)) { handleSetLimitCommand(chatId, text); return "OK"; }
+            
+            // ADD THIS NEW LINE FOR MANUAL MESSAGING:
+            if (text.startsWith("/sendmsg") && isAdmin(chatId)) { handleSendCustomMessageCommand(chatId, text); return "OK"; }
 
     // Cleanup task to keep the database small (deletes IDs older than 24 hours)
     @Scheduled(cron = "0 0 0 * * *")
@@ -471,6 +458,30 @@ public class RouterController {
             sendTelegram(adminChatId, "✅ Success! Alert limit updated to *" + newLimit + "* for target: `" + target + "`");
         } else {
             sendTelegram(adminChatId, "❌ User mapping not found for identifier: `" + target + "`");
+        }
+    }
+
+    private void handleSendCustomMessageCommand(String adminChatId, String text) throws Exception {
+        // Expected format: /sendmsg <chat_id> <your custom message here>
+        // We split by space, but limit it to 3 parts so the actual message spaces stay intact
+        String[] parts = text.split("\\s+", 3);
+        
+        if (parts.length < 3) {
+            sendTelegram(adminChatId, "⚠️ Usage: `/sendmsg <chat_id> <message>`");
+            return;
+        }
+
+        String targetChatId = parts[1].trim();
+        String customMessage = parts[2].trim();
+
+        try {
+            // Reuses your existing Telegram sender to push the message directly to the user
+            sendTelegram(targetChatId, customMessage);
+            
+            // Confirms back to you that it was sent successfully
+            sendTelegram(adminChatId, "🚀 Message manually sent to `" + targetChatId + "`:\n\n" + customMessage);
+        } catch (Exception e) {
+            sendTelegram(adminChatId, "❌ Failed to send message to `" + targetChatId + "`. Error: " + e.getMessage());
         }
     }
 
