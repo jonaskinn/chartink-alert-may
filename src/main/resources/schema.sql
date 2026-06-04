@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS user_map (
     uid TEXT PRIMARY KEY,
     chat_id TEXT NOT NULL,
     user_key TEXT NOT NULL,
-    updated_at BIGINT
+    updated_at BIGINT,
+    alert_limit INT NOT NULL DEFAULT 100 -- Added for dynamic limits
 );
 
 -- 2) Create unique indexes for performance and constraints
