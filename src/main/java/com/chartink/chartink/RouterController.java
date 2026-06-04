@@ -444,7 +444,7 @@ public class RouterController {
     }
 
     private void handleSetLimitCommand(String adminChatId, String text) throws Exception {
-        // Expected format: /setlimit <telegram_chat_id_or_uid> <new_limit>
+        // Expected syntax: /setlimit <chat_id_or_uid> <new_limit>
         String[] parts = text.split("\\s+");
         if (parts.length < 3) {
             sendTelegram(adminChatId, "⚠️ Usage: `/setlimit <chat_id_or_uid> <limit>`");
@@ -457,20 +457,20 @@ public class RouterController {
         try {
             newLimit = Integer.parseInt(parts[2].trim());
         } catch (NumberFormatException e) {
-            sendTelegram(adminChatId, "❌ Invalid limit number.");
+            sendTelegram(adminChatId, "❌ Invalid limit number structure.");
             return;
         }
 
-        // Update using either chat_id or unique app uid to make it easy for you to target users
+        // FIXED: Changed alert_limit to max_alerts to match your table column exactly
         int rowsAffected = jdbc.update(
-                "UPDATE user_map SET alert_limit = ? WHERE chat_id = ? OR LOWER(uid) = LOWER(?)",
+                "UPDATE user_map SET max_alerts = ? WHERE chat_id = ? OR LOWER(uid) = LOWER(?)",
                 newLimit, target, target
         );
 
         if (rowsAffected > 0) {
             sendTelegram(adminChatId, "✅ Success! Alert limit updated to *" + newLimit + "* for target: `" + target + "`");
         } else {
-            sendTelegram(adminChatId, "❌ User not found with Chat ID or UID: `" + target + "`");
+            sendTelegram(adminChatId, "❌ User mapping not found for identifier: `" + target + "`");
         }
     }
 
