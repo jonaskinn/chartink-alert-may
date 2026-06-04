@@ -42,9 +42,6 @@ public class RouterController {
         this.jdbc = jdbc;
     }
 
-    // Fix for "POST method not supported" warnings from bots
-    
-
     // 1) Chartink Webhook
     @PostMapping(
             value = "/chartink",
@@ -73,20 +70,19 @@ public class RouterController {
 
         if (row == null) return "UID_NOT_LINKED";
 
+        String chatId = (String) row.get("chat_id");
         String expectedKey = (String) row.get("user_key");
         if (expectedKey == null || !expectedKey.equals(providedKey)) return "FORBIDDEN";
 
-        String chatId = (String) row.get("chat_id");
-        
         // Fetch the user's custom alert limit (defaults to 100 if something goes wrong)
         Integer alertLimit = jdbc.queryForObject(
-                "SELECT COALESCE(alert_limit, 100) FROM user_map WHERE chat_id = ?",
+                "SELECT COALESCE(max_alerts, 100) FROM user_map WHERE chat_id = ?",
                 Integer.class, chatId
         );
         if (alertLimit == null) alertLimit = 100;
 
         int currentUsage = getTodayUsageFromDailyTable(chatId);
-        if (currentUsage >= alertLimit) { // Checked against the dynamic limit instead of 100
+        if (currentUsage >= alertLimit) { 
             return "LIMIT_EXCEEDED";
         }
         incrementTodayUsage(chatId);
@@ -114,19 +110,15 @@ public class RouterController {
         if (updateIdObj instanceof Number) {
             long updateId = ((Number) updateIdObj).longValue();
 
-            // Try to insert update_id into DB. If it exists, INSERT will fail (ON CONFLICT DO NOTHING)
-            // or we check if we actually inserted a row.
             try {
                 int rowsAffected = jdbc.update(
                         "INSERT INTO telegram_updates (update_id) VALUES (?) ON CONFLICT (update_id) DO NOTHING",
                         updateId
                 );
 
-                // If rowsAffected is 0, it means it was a duplicate and we do nothing.
                 if (rowsAffected == 0) return "OK";
 
             } catch (Exception e) {
-                // Secondary check for non-PostgreSQL DBs or unique constraint errors
                 return "OK";
             }
         }
@@ -170,9 +162,13 @@ public class RouterController {
             if (text.startsWith("/adminusers") && isAdmin(chatId)) { handleAdminUsers(chatId); return "OK"; }
             if (text.startsWith("/admintop") && isAdmin(chatId)) { handleAdminTop(chatId); return "OK"; }
             if (text.startsWith("/setlimit") && isAdmin(chatId)) { handleSetLimitCommand(chatId, text); return "OK"; }
-            
-            // ADD THIS NEW LINE FOR MANUAL MESSAGING:
             if (text.startsWith("/sendmsg") && isAdmin(chatId)) { handleSendCustomMessageCommand(chatId, text); return "OK"; }
+
+            return "OK";
+        } catch (Exception ex) {
+            return "OK";
+        }
+    }
 
     // Cleanup task to keep the database small (deletes IDs older than 24 hours)
     @Scheduled(cron = "0 0 0 * * *")
@@ -336,10 +332,7 @@ public class RouterController {
             String cleanBody = body.trim();
 
             if (cleanBody.startsWith("{")) {
-                // Capture the full list of all stocks
                 triggeredStocks = extractJsonValue(cleanBody, "stocks");
-
-                // Extract primary symbol and price
                 String symbol = extractJsonValue(cleanBody, "symbol");
                 String price = extractJsonValue(cleanBody, "trigger_price");
 
@@ -370,15 +363,8 @@ public class RouterController {
         StringBuilder sb = new StringBuilder();
         sb.append("🔔 *New Alert*").append("\n\n");
         if (!scanName.isEmpty()) sb.append("🧠 *Scan:* ").append(escapeMarkdown(scanName)).append("\n");
-
-        // Primary stock triggered
         if (!stockData.isEmpty()) sb.append("📈 *Trigger:* ").append(escapeMarkdown(stockData)).append("\n");
-
-        // Show the full list of all stocks from the Chartink payload
-        if (!triggeredStocks.isEmpty()) {
-            sb.append("📋 *Full List:* ").append(escapeMarkdown(triggeredStocks)).append("\n");
-        }
-
+        if (!triggeredStocks.isEmpty()) sb.append("📋 *Full List:* ").append(escapeMarkdown(triggeredStocks)).append("\n");
         if (!timePart.isEmpty()) sb.append("⏰ *Time:* ").append(escapeMarkdown(timePart)).append("\n");
 
         return sb.toString().trim();
@@ -391,15 +377,12 @@ public class RouterController {
             if (start == -1) return "";
 
             start += pattern.length();
-            // Skip whitespace, colons, and the opening quote
             while (start < json.length() && (json.charAt(start) == ' ' || json.charAt(start) == ':' || json.charAt(start) == '"')) {
                 start++;
             }
 
-            // Find the ending quote of the value
             int end = json.indexOf("\"", start);
             if (end == -1) {
-                // Fallback for unquoted numbers/values if quotes aren't found
                 int endComma = json.indexOf(",", start);
                 int endBrace = json.indexOf("}", start);
                 if (endComma == -1) end = endBrace;
@@ -431,7 +414,6 @@ public class RouterController {
     }
 
     private void handleSetLimitCommand(String adminChatId, String text) throws Exception {
-        // Expected syntax: /setlimit <chat_id_or_uid> <new_limit>
         String[] parts = text.split("\\s+");
         if (parts.length < 3) {
             sendTelegram(adminChatId, "⚠️ Usage: `/setlimit <chat_id_or_uid> <limit>`");
@@ -448,7 +430,6 @@ public class RouterController {
             return;
         }
 
-        // FIXED: Changed alert_limit to max_alerts to match your table column exactly
         int rowsAffected = jdbc.update(
                 "UPDATE user_map SET max_alerts = ? WHERE chat_id = ? OR LOWER(uid) = LOWER(?)",
                 newLimit, target, target
@@ -462,8 +443,6 @@ public class RouterController {
     }
 
     private void handleSendCustomMessageCommand(String adminChatId, String text) throws Exception {
-        // Expected format: /sendmsg <chat_id> <your custom message here>
-        // We split by space, but limit it to 3 parts so the actual message spaces stay intact
         String[] parts = text.split("\\s+", 3);
         
         if (parts.length < 3) {
@@ -475,10 +454,7 @@ public class RouterController {
         String customMessage = parts[2].trim();
 
         try {
-            // Reuses your existing Telegram sender to push the message directly to the user
             sendTelegram(targetChatId, customMessage);
-            
-            // Confirms back to you that it was sent successfully
             sendTelegram(adminChatId, "🚀 Message manually sent to `" + targetChatId + "`:\n\n" + customMessage);
         } catch (Exception e) {
             sendTelegram(adminChatId, "❌ Failed to send message to `" + targetChatId + "`. Error: " + e.getMessage());
