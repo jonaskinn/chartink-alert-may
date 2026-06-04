@@ -77,8 +77,16 @@ public class RouterController {
         if (expectedKey == null || !expectedKey.equals(providedKey)) return "FORBIDDEN";
 
         String chatId = (String) row.get("chat_id");
+        
+        // Fetch the user's custom alert limit (defaults to 100 if something goes wrong)
+        Integer alertLimit = jdbc.queryForObject(
+                "SELECT COALESCE(alert_limit, 100) FROM user_map WHERE chat_id = ?",
+                Integer.class, chatId
+        );
+        if (alertLimit == null) alertLimit = 100;
+
         int currentUsage = getTodayUsageFromDailyTable(chatId);
-        if (currentUsage >= 100) {
+        if (currentUsage >= alertLimit) { // Checked against the dynamic limit instead of 100
             return "LIMIT_EXCEEDED";
         }
         incrementTodayUsage(chatId);
@@ -161,6 +169,7 @@ public class RouterController {
             if (text.startsWith("/adminstats") && isAdmin(chatId)) { handleAdminStats(chatId); return "OK"; }
             if (text.startsWith("/adminusers") && isAdmin(chatId)) { handleAdminUsers(chatId); return "OK"; }
             if (text.startsWith("/admintop") && isAdmin(chatId)) { handleAdminTop(chatId); return "OK"; }
+            if (text.startsWith("/setlimit") && isAdmin(chatId)) { handleSetLimitCommand(chatId, text); return "OK"; }
 
             if (text.startsWith("/link")) { handleCustomLink(chatId, text); return "OK"; }
 
@@ -424,6 +433,37 @@ public class RouterController {
     private void incrementTodayUsage(String chatId) {
         jdbc.update("INSERT INTO daily_usage(day, chat_id, alerts_count) VALUES(CURRENT_DATE,?,1) " +
                 "ON CONFLICT (day, chat_id) DO UPDATE SET alerts_count = daily_usage.alerts_count + 1", chatId);
+    }
+
+    private void handleSetLimitCommand(String adminChatId, String text) throws Exception {
+        // Expected format: /setlimit <telegram_chat_id_or_uid> <new_limit>
+        String[] parts = text.split("\\s+");
+        if (parts.length < 3) {
+            sendTelegram(adminChatId, "⚠️ Usage: `/setlimit <chat_id_or_uid> <limit>`");
+            return;
+        }
+
+        String target = parts[1].trim();
+        int newLimit;
+        
+        try {
+            newLimit = Integer.parseInt(parts[2].trim());
+        } catch (NumberFormatException e) {
+            sendTelegram(adminChatId, "❌ Invalid limit number.");
+            return;
+        }
+
+        // Update using either chat_id or unique app uid to make it easy for you to target users
+        int rowsAffected = jdbc.update(
+                "UPDATE user_map SET alert_limit = ? WHERE chat_id = ? OR LOWER(uid) = LOWER(?)",
+                newLimit, target, target
+        );
+
+        if (rowsAffected > 0) {
+            sendTelegram(adminChatId, "✅ Success! Alert limit updated to *" + newLimit + "* for target: `" + target + "`");
+        } else {
+            sendTelegram(adminChatId, "❌ User not found with Chat ID or UID: `" + target + "`");
+        }
     }
 
     private String escapeJson(String s) {
