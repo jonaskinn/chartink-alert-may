@@ -169,7 +169,15 @@ public class RouterController {
             if (text.startsWith("/adminstats") && isAdmin(chatId)) { handleAdminStats(chatId); return "OK"; }
             if (text.startsWith("/adminusers") && isAdmin(chatId)) { handleAdminUsers(chatId); return "OK"; }
             if (text.startsWith("/admintop") && isAdmin(chatId)) { handleAdminTop(chatId); return "OK"; }
-            if (text.startsWith("/setlimit") && isAdmin(chatId)) { handleSetLimitCommand(chatId, text); return "OK"; }
+            try {
+    if (text.startsWith("/setlimit") && isAdmin(chatId)) { 
+        handleSetLimitCommand(chatId, text); 
+        return "OK"; 
+    }
+} catch (Exception e) {
+    sendTelegram(chatId, "⚠️ Internal Command Error: " + e.getMessage());
+    return "OK";
+}
 
             if (text.startsWith("/link")) { handleCustomLink(chatId, text); return "OK"; }
 
