@@ -6,13 +6,10 @@ const crypto = require('crypto');
 
 const app = express();
 
-// Middleware to parse text or JSON payloads cleanly
+// Middleware configuration
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.text({ type: '*/*' }));
-
-// Serve all your existing front-end pages perfectly
-app.use(express.static(path.join(__dirname, 'src/main/resources/static')));
 
 // Database Setup
 const pool = new Pool({
@@ -21,7 +18,7 @@ const pool = new Pool({
 });
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const PUBLIC_URL = process.env.APP_PUBLIC_URL || '';
+const PUBLIC_URL = process.env.APP_PUBLIC_URL || 'https://notifyu.me';
 const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim();
 
 // Alphabets for UID and Key generation
@@ -37,7 +34,6 @@ function generateRandomString(alphabet, length) {
     return result;
 }
 
-// Escapes special markdown text strings for Telegram
 function escapeMarkdown(s) {
     if (!s) return "";
     return s.replace(/_/g, "\\_").replace(/\*/g, "\\*").replace(/\[/g, "\\[").replace(/\]/g, "\\]")
@@ -47,7 +43,11 @@ function escapeMarkdown(s) {
             .replace(/\./g, "\\.").replace(/!/g, "\\!");
 }
 
-// Safe asynchronous non-blocking Telegram Sender
+function escapeJson(s) {
+    if (!s) return "";
+    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
 function sendTelegram(chatId, text) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     axios.post(url, {
@@ -57,17 +57,49 @@ function sendTelegram(chatId, text) {
     }).catch(err => console.error("Telegram API sending error:", err.message));
 }
 
+// Database Auto-Initialization Routine (Replicates your schema.sql automatically)
+async function initDatabase() {
+    try {
+        console.log("Initializing database tables...");
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS user_map (
+                uid TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                user_key TEXT NOT NULL,
+                updated_at BIGINT,
+                alert_limit INT NOT NULL DEFAULT 100
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_user_map_chat_id ON user_map(chat_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_user_map_user_key ON user_map(user_key);
+            
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                day DATE NOT NULL,
+                chat_id TEXT NOT NULL,
+                alerts_count INT NOT NULL DEFAULT 0,
+                PRIMARY KEY (day, chat_id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS telegram_updates (
+                update_id BIGINT PRIMARY KEY,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_telegram_updates_time ON telegram_updates(processed_at);
+        `);
+        console.log("Database tables verified successfully!");
+    } catch (err) {
+        console.error("Database initialization error:", err.message);
+    }
+}
+
 // 1) Chartink Webhook Endpoint
 app.post('/chartink', async (req, res) => {
     const uid = (req.query.uid || '').trim().toLowerCase();
     const key = (req.query.key || '').trim();
     let body = req.body;
 
-    if (!uid) return res.send("NO_UID");
-    if (!key) return res.send("NO_KEY");
+    if (!uid || !key) return res.send("NO_UID_OR_KEY");
 
     try {
-        // Automatically fixes the column mismatch bug by querying alert_limit safely
         const userQuery = await pool.query(
             "SELECT chat_id, user_key, COALESCE(alert_limit, 100) as max_alerts FROM user_map WHERE uid = $1",
             [uid]
@@ -78,7 +110,6 @@ app.post('/chartink', async (req, res) => {
 
         if (user.user_key !== key) return res.send("FORBIDDEN");
 
-        // Fetch current day's limit metric
         const todayStr = new Date().toISOString().split('T')[0];
         const usageQuery = await pool.query(
             "SELECT alerts_count FROM daily_usage WHERE chat_id = $1 AND day = $2",
@@ -90,26 +121,25 @@ app.post('/chartink', async (req, res) => {
             return res.send("LIMIT_EXCEEDED");
         }
 
-        // Atomically log increment metric
         await pool.query(
             `INSERT INTO daily_usage(day, chat_id, alerts_count) VALUES($1, $2, 1)
              ON CONFLICT (day, chat_id) DO UPDATE SET alerts_count = daily_usage.alerts_count + 1`,
             [todayStr, user.chat_id]
         );
 
-        // Parse alert block
         const msg = buildMessage(uid, body);
         sendTelegram(user.chat_id, msg);
 
         return res.send("OK");
     } catch (err) {
-        console.error(err);
+        console.error("Chartink Webhook Runtime Error:", err.message);
         return res.send("OK");
     }
 });
 
 // 2) Telegram Live Communication Router Webhook
 app.post('/telegram', async (req, res) => {
+    console.log("Received a Telegram webhook ping!");
     const update = req.body;
     const updateId = update.update_id;
 
@@ -119,7 +149,7 @@ app.post('/telegram', async (req, res) => {
                 "INSERT INTO telegram_updates (update_id) VALUES ($1) ON CONFLICT (update_id) DO NOTHING",
                 [updateId]
             );
-            if (dedup.rowCount === 0) return res.send("OK"); // Ignore if duplicate request processed
+            if (dedup.rowCount === 0) return res.send("OK");
         } catch (e) {
             return res.send("OK");
         }
@@ -131,7 +161,6 @@ app.post('/telegram', async (req, res) => {
 
         const chatId = String(message.chat.id);
         const text = message.text.trim();
-
         const isAdmin = (chatId === ADMIN_CHAT_ID);
 
         if (text.startsWith("/start")) {
@@ -186,7 +215,6 @@ app.post('/telegram', async (req, res) => {
             return res.send("OK");
         }
 
-        // Admin Engine Controllers
         if (isAdmin) {
             if (text.startsWith("/adminstats")) {
                 const totalUsers = await pool.query("SELECT COUNT(*) FROM user_map");
@@ -247,7 +275,7 @@ app.post('/telegram', async (req, res) => {
 
         return res.send("OK");
     } catch (err) {
-        console.error(err);
+        console.error("Telegram Router Error:", err.message);
         return res.send("OK");
     }
 });
@@ -325,15 +353,25 @@ function buildMessage(uid, body) {
     return sb.trim();
 }
 
-// Low-overhead background cleanup routine running every 12 hours
+// Background tables vacuuming task
 setInterval(async () => {
     try {
         await pool.query("DELETE FROM telegram_updates WHERE processed_at < NOW() - INTERVAL '1 day'");
-        console.log("Database update tables cleaned successfully.");
     } catch (err) {
-        console.error("Cleanup runtime error:", err.message);
+        console.error("Cleanup error:", err.message);
     }
 }, 12 * 60 * 60 * 1000);
 
+// Safe Static Asset Router (Placed below webhook definitions to prevent routing overrides)
+app.use(express.static(path.join(__dirname, 'src/main/resources/static')));
+
+// Capture all fallback web traffic directly to your primary index file
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'src/main/resources/static/index.html'));
+});
+
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Ultra-low footprint Node router active on port ${PORT}`));
+app.listen(PORT, async () => {
+    console.log(`Ultra-low footprint Node router active on port ${PORT}`);
+    await initDatabase();
+});
