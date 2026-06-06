@@ -1,0 +1,14 @@
+{
+  "name": "chartink-alert-router",
+  "version": "1.0.0",
+  "description": "Ultra-lightweight alert router to Telegram",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
