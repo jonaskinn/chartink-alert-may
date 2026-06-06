@@ -73,7 +73,7 @@ app.post('/chartink', async (req, res) => {
     try {
         // Automatically fixes the column mismatch bug by querying alert_limit safely
         const userQuery = await pool.query(
-            "SELECT chat_id, user_key, COALESCE(alert_limit, 100) as max_alerts FROM user_map WHERE uid = $1",
+            "SELECT chat_id, user_key, COALESCE(max_alerts, 100) as max_alerts FROM user_map WHERE uid = $1",
             [uid]
         );
 
@@ -226,7 +226,7 @@ app.post('/telegram', async (req, res) => {
                 if (isNaN(newLimit)) return sendTelegram(chatId, "❌ Invalid limit number structure.");
 
                 const updateLimit = await pool.query(
-                    "UPDATE user_map SET alert_limit = $1 WHERE chat_id = $2 OR LOWER(uid) = LOWER($3)",
+                    "UPDATE user_map SET max_alerts = $1 WHERE chat_id = $2 OR LOWER(uid) = LOWER($3)",
                     [newLimit, target, target]
                 );
                 if (updateLimit.rowCount > 0) {
