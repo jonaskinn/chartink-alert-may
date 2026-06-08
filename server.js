@@ -6,10 +6,10 @@ const crypto = require('crypto');
 
 const app = express();
 
-// Middleware to parse text or JSON payloads cleanly
+// Correct middleware layering order
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.text({ type: '*/*' }));
+app.use(express.text({ type: 'text/*' }));
 
 // Serve all your existing front-end pages perfectly
 app.use(express.static(path.join(__dirname, 'src/main/resources/static')));
@@ -28,7 +28,6 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PUBLIC_URL = process.env.APP_PUBLIC_URL || '';
 const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim();
 
-// Alphabets for UID and Key generation
 const UID_ALPHABET = "abcdefghjklmnpqrstuvwxyz23456789";
 const KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -41,7 +40,6 @@ function generateRandomString(alphabet, length) {
     return result;
 }
 
-// Escapes special markdown text strings for Telegram
 function escapeMarkdown(s) {
     if (!s) return "";
     return s.replace(/_/g, "\\_").replace(/\*/g, "\\*").replace(/\[/g, "\\[").replace(/\]/g, "\\]")
@@ -51,7 +49,6 @@ function escapeMarkdown(s) {
             .replace(/\./g, "\\.").replace(/!/g, "\\!");
 }
 
-// Safe asynchronous non-blocking Telegram Sender
 function sendTelegram(chatId, text) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     axios.post(url, {
@@ -61,17 +58,23 @@ function sendTelegram(chatId, text) {
     }).catch(err => console.error("Telegram API sending error:", err.message));
 }
 
-// 1) Chartink Webhook Endpoint
+// 1) Chartink & Tradingview Webhook Endpoint
 app.post('/chartink', async (req, res) => {
-    const uid = (req.query.uid || '').trim().toLowerCase();
-    const key = (req.query.key || '').trim();
+    // Robust parsing: reads from query params (TradingView) OR form bodies (Chartink)
+    let uid = (req.query.uid || req.body.uid || '').trim().toLowerCase();
+    let key = (req.query.key || req.body.key || '').trim();
     let body = req.body;
+
+    // If Chartink payload arrived as a raw text string, dynamically extract parameters
+    if (typeof body === 'string') {
+        if (!uid) uid = (extractJsonValue(body, "uid") || '').trim().toLowerCase();
+        if (!key) key = (extractJsonValue(body, "key") || '').trim();
+    }
 
     if (!uid) return res.send("NO_UID");
     if (!key) return res.send("NO_KEY");
 
     try {
-        // Automatically fixes the column mismatch bug by querying alert_limit safely
         const userQuery = await pool.query(
             "SELECT chat_id, user_key, COALESCE(max_alerts, 100) as max_alerts FROM user_map WHERE uid = $1",
             [uid]
@@ -82,7 +85,6 @@ app.post('/chartink', async (req, res) => {
 
         if (user.user_key !== key) return res.send("FORBIDDEN");
 
-        // Fetch current day's limit metric
         const todayStr = new Date().toISOString().split('T')[0];
         const usageQuery = await pool.query(
             "SELECT alerts_count FROM daily_usage WHERE chat_id = $1 AND day = $2",
@@ -94,15 +96,13 @@ app.post('/chartink', async (req, res) => {
             return res.send("LIMIT_EXCEEDED");
         }
 
-        // Atomically log increment metric
         await pool.query(
             `INSERT INTO daily_usage(day, chat_id, alerts_count) VALUES($1, $2, 1)
              ON CONFLICT (day, chat_id) DO UPDATE SET alerts_count = daily_usage.alerts_count + 1`,
             [todayStr, user.chat_id]
         );
 
-        // Parse alert block
-        const msg = buildMessage(uid, body);
+        const msg = buildMessage(uid, typeof body === 'object' ? JSON.stringify(body) : body);
         sendTelegram(user.chat_id, msg);
 
         return res.send("OK");
@@ -112,9 +112,13 @@ app.post('/chartink', async (req, res) => {
     }
 });
 
-// 2) Telegram Live Communication Router Webhook
+// 2) Telegram Live Communication Webhook
 app.post('/telegram', async (req, res) => {
+    // FIXES THE 1-2 MINUTE LAG: Acknowledge Telegram immediately so it never triggers duplicate queue retries
+    res.status(200).send("OK");
+
     const update = req.body;
+    if (!update) return;
     const updateId = update.update_id;
 
     if (updateId) {
@@ -123,19 +127,18 @@ app.post('/telegram', async (req, res) => {
                 "INSERT INTO telegram_updates (update_id) VALUES ($1) ON CONFLICT (update_id) DO NOTHING",
                 [updateId]
             );
-            if (dedup.rowCount === 0) return res.send("OK"); // Ignore if duplicate request processed
+            if (dedup.rowCount === 0) return; 
         } catch (e) {
-            return res.send("OK");
+            return;
         }
     }
 
     try {
         const message = update.message || update.edited_message || update.channel_post || update.edited_channel_post;
-        if (!message || !message.chat || !message.text) return res.send("OK");
+        if (!message || !message.chat || !message.text) return;
 
         const chatId = String(message.chat.id);
         const text = message.text.trim();
-
         const isAdmin = (chatId === ADMIN_CHAT_ID);
 
         if (text.startsWith("/start")) {
@@ -149,21 +152,21 @@ app.post('/telegram', async (req, res) => {
                     [newUid, chatId, newKey, Math.floor(Date.now() / 1000)]);
                 sendTelegram(chatId, buildLinkedMessage(newUid, newKey));
             }
-            return res.send("OK");
+            return;
         }
 
         if (text.startsWith("/myuid")) {
             const existing = await pool.query("SELECT uid, user_key FROM user_map WHERE chat_id = $1", [chatId]);
             if (existing.rows.length === 0) return sendTelegram(chatId, "/start to generate.");
             sendTelegram(chatId, buildLinkedMessage(existing.rows[0].uid, existing.rows[0].user_key));
-            return res.send("OK");
+            return;
         }
 
         if (text.startsWith("/unlink")) {
             if (!text.includes("confirm")) return sendTelegram(chatId, "⚠️ Send `/unlink confirm` to delete your link.");
             await pool.query("DELETE FROM user_map WHERE chat_id = $1", [chatId]);
             sendTelegram(chatId, "❌ Unlinked.");
-            return res.send("OK");
+            return;
         }
 
         if (text.startsWith("/newuid")) {
@@ -174,7 +177,7 @@ app.post('/telegram', async (req, res) => {
             await pool.query("INSERT INTO user_map(uid, chat_id, user_key, updated_at) VALUES($1,$2,$3,$4)", 
                 [newUid, chatId, newKey, Math.floor(Date.now() / 1000)]);
             sendTelegram(chatId, buildLinkedMessage(newUid, newKey));
-            return res.send("OK");
+            return;
         }
 
         if (text.startsWith("/stats")) {
@@ -182,15 +185,15 @@ app.post('/telegram', async (req, res) => {
             const usageQuery = await pool.query("SELECT alerts_count FROM daily_usage WHERE chat_id = $1 AND day = $2", [chatId, todayStr]);
             const todayCount = usageQuery.rows[0]?.alerts_count || 0;
             sendTelegram(chatId, `📊 *Daily Usage*\nUsed: ${todayCount} / 100`);
-            return res.send("OK");
+            return;
         }
 
         if (text.startsWith("/more")) {
             sendTelegram(chatId, "⚙️ *Other Actions*\n\n/newuid - Rotate URL\n/unlink - Delete account");
-            return res.send("OK");
+            return;
         }
 
-        // Admin Engine Controllers
+        // Admin Controllers
         if (isAdmin) {
             if (text.startsWith("/adminstats")) {
                 const totalUsers = await pool.query("SELECT COUNT(*) FROM user_map");
@@ -235,24 +238,9 @@ app.post('/telegram', async (req, res) => {
                     sendTelegram(chatId, `❌ User mapping not found for identifier: \`${target}\``);
                 }
             }
-            else if (text.startsWith("/sendmsg")) {
-                const parts = text.split(/\s+/);
-                if (parts.length < 3) return sendTelegram(chatId, "⚠️ Usage: `/sendmsg <chat_id> <message>`");
-                const targetChat = parts[1].trim();
-                const customMsg = text.substring(text.indexOf(parts[2])).trim();
-                try {
-                    sendTelegram(targetChat, customMsg);
-                    sendTelegram(chatId, `🚀 Message manually sent to \`${targetChat}\`:\n\n${customMsg}`);
-                } catch (e) {
-                    sendTelegram(chatId, `❌ Failed to send message to \`${targetChat}\`.`);
-                }
-            }
         }
-
-        return res.send("OK");
     } catch (err) {
         console.error(err);
-        return res.send("OK");
     }
 });
 
@@ -267,7 +255,15 @@ function extractJsonValue(jsonStr, key) {
     try {
         const pattern = `"${key}":`;
         let start = jsonStr.indexOf(pattern);
-        if (start === -1) return "";
+        if (start === -1) {
+            const formPattern = `${key}=`;
+            start = jsonStr.indexOf(formPattern);
+            if (start === -1) return "";
+            start += formPattern.length;
+            let end = jsonStr.indexOf('&', start);
+            if (end === -1) end = jsonStr.length;
+            return jsonStr.substring(start, end).trim();
+        }
         start += pattern.length;
         while (start < jsonStr.length && (jsonStr[start] === ' ' || jsonStr[start] === ':' || jsonStr[start] === '"')) {
             start++;
