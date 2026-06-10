@@ -1,2 +1,2 @@
 [start]
-cmd = "node server.js"
+cmd = "./chartink-alert-router"
