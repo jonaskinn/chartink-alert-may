@@ -489,6 +489,28 @@ func handleTelegram(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if strings.HasPrefix(text, "/sendmsg") {
+			parts := strings.Fields(text)
+			if len(parts) < 3 {
+				go sendTelegram(chatIDStr, "⚠️ Usage: `/sendmsg <chat_id> <message>`")
+				return
+			}
+			targetChat := strings.TrimSpace(parts[1])
+
+			// Reconstruct the message text (everything after the chat_id)
+			idx := strings.Index(text, parts[1])
+			customMsg := strings.TrimSpace(text[idx+len(parts[1]):])
+
+			if customMsg == "" {
+				go sendTelegram(chatIDStr, "⚠️ Message cannot be empty.")
+				return
+			}
+
+			go sendTelegram(targetChat, customMsg)
+			go sendTelegram(chatIDStr, fmt.Sprintf("🚀 Message sent to `%s`:\n\n%s", targetChat, customMsg))
+			return
+		}
+
 		if strings.HasPrefix(text, "/adminusers") {
 			rows, err := db.Query("SELECT uid, chat_id FROM user_map ORDER BY updated_at DESC LIMIT 10")
 			if err != nil {
