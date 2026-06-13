@@ -489,6 +489,35 @@ func handleTelegram(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if strings.HasPrefix(text, "/setlimitall") {
+			parts := strings.Fields(text)
+			if len(parts) < 2 {
+				go sendTelegram(chatIDStr, "⚠️ Usage: `/setlimitall <limit>`")
+				return
+			}
+			newLimit, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				go sendTelegram(chatIDStr, "❌ Invalid limit number.")
+				return
+			}
+
+			result, err := db.Exec("UPDATE user_map SET max_alerts = $1", newLimit)
+			if err != nil {
+				go sendTelegram(chatIDStr, "❌ Database error while updating limits.")
+				return
+			}
+
+			rowsAffected, _ := result.RowsAffected()
+
+			// Clear entire RAM cache so new limit applies immediately to everyone
+			userCacheMutex.Lock()
+			userCache = make(map[string]UserCacheEntry)
+			userCacheMutex.Unlock()
+
+			go sendTelegram(chatIDStr, fmt.Sprintf("✅ Alert limit updated to *%d* for *%d* users.", newLimit, rowsAffected))
+			return
+		}
+
 		if strings.HasPrefix(text, "/sendmsg") {
 			parts := strings.Fields(text)
 			if len(parts) < 3 {
