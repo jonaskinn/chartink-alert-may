@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -445,6 +446,46 @@ func handleTelegram(w http.ResponseWriter, r *http.Request) {
 				sb += "No alerts recorded today."
 			}
 			go sendTelegram(chatIDStr, sb)
+			return
+		}
+
+		if strings.HasPrefix(text, "/alertlimit") {
+			parts := strings.Fields(text)
+			if len(parts) < 3 {
+				go sendTelegram(chatIDStr, "⚠️ Usage: `/alertlimit <chat_id_or_uid> <limit>`")
+				return
+			}
+			target := strings.TrimSpace(parts[1])
+			newLimit, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+			if err != nil {
+				go sendTelegram(chatIDStr, "❌ Invalid limit number.")
+				return
+			}
+
+			result, err := db.Exec(
+				"UPDATE user_map SET max_alerts = $1 WHERE chat_id = $2 OR LOWER(uid) = LOWER($3)",
+				newLimit, target, target,
+			)
+			if err != nil {
+				go sendTelegram(chatIDStr, "❌ Database error while updating limit.")
+				return
+			}
+
+			rowsAffected, _ := result.RowsAffected()
+			if rowsAffected > 0 {
+				// Invalidate RAM cache so new limit takes effect immediately
+				userCacheMutex.Lock()
+				for k, v := range userCache {
+					if v.ChatID == target || strings.EqualFold(k, target) {
+						delete(userCache, k)
+					}
+				}
+				userCacheMutex.Unlock()
+
+				go sendTelegram(chatIDStr, fmt.Sprintf("✅ Success! Alert limit updated to *%d* for target: `%s`", newLimit, target))
+			} else {
+				go sendTelegram(chatIDStr, fmt.Sprintf("❌ User mapping not found for identifier: `%s`", target))
+			}
 			return
 		}
 
