@@ -406,6 +406,7 @@ func handleTelegram(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Admin commands
+	// Admin commands
 	if isAdmin {
 		if strings.HasPrefix(text, "/adminstats") {
 			var totalUsers int
@@ -414,6 +415,60 @@ func handleTelegram(w http.ResponseWriter, r *http.Request) {
 			_ = db.QueryRow("SELECT COUNT(*) FROM user_map").Scan(&totalUsers)
 			_ = db.QueryRow("SELECT COALESCE(SUM(alerts_count), 0) FROM daily_usage WHERE day = $1", todayStr).Scan(&todayAlerts)
 			go sendTelegram(chatIDStr, fmt.Sprintf("📊 *Admin Stats*\n\nTotal Users: %d\nAlerts Today: %d", totalUsers, todayAlerts))
+			return
+		}
+
+		if strings.HasPrefix(text, "/admintop") {
+			todayStr := time.Now().Format("2006-01-02")
+			rows, err := db.Query(
+				`SELECT um.uid, du.alerts_count FROM daily_usage du
+				 JOIN user_map um ON um.chat_id = du.chat_id
+				 WHERE du.day = $1 ORDER BY du.alerts_count DESC LIMIT 10`, todayStr,
+			)
+			if err != nil {
+				go sendTelegram(chatIDStr, "❌ Failed to fetch top users.")
+				return
+			}
+			defer rows.Close()
+
+			sb := "🏆 *Top 10 Today*\n\n"
+			count := 0
+			for rows.Next() {
+				var uid string
+				var alertsCount int
+				if err := rows.Scan(&uid, &alertsCount); err == nil {
+					sb += fmt.Sprintf("• %s: %d\n", uid, alertsCount)
+					count++
+				}
+			}
+			if count == 0 {
+				sb += "No alerts recorded today."
+			}
+			go sendTelegram(chatIDStr, sb)
+			return
+		}
+
+		if strings.HasPrefix(text, "/adminusers") {
+			rows, err := db.Query("SELECT uid, chat_id FROM user_map ORDER BY updated_at DESC LIMIT 10")
+			if err != nil {
+				go sendTelegram(chatIDStr, "❌ Failed to fetch users.")
+				return
+			}
+			defer rows.Close()
+
+			sb := "👥 *Last 10 Registered Users*\n\n"
+			count := 0
+			for rows.Next() {
+				var uid, chatID string
+				if err := rows.Scan(&uid, &chatID); err == nil {
+					sb += fmt.Sprintf("• %s | %s\n", uid, chatID)
+					count++
+				}
+			}
+			if count == 0 {
+				sb += "No users registered yet."
+			}
+			go sendTelegram(chatIDStr, sb)
 			return
 		}
 	}
